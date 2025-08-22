@@ -66,10 +66,21 @@ async def initialize_agent_client():
         logger.error(f"Failed to initialize AIProjectClient: {str(e)}")
         return False
 
+# Check if error is the specific BingGroundingRequestParam ast.Name issue
+def is_bing_ast_error(error_msg):
+    if not error_msg:
+        return False
+    error_str = str(error_msg)
+    return (
+        'tool_server_error' in error_str and
+        'bing_grounding_server_error' in error_str and
+        'BingGroundingRequestParam' in error_str and
+        'ast.Name object' in error_str
+    )
+
 # Query an Azure AI Foundry Agent
 async def query_agent(client: AIProjectClient, agent_id: str, query: str) -> Dict:
     try:
-        # Get the agent directly without extra metadata
         agent = await client.agents.get_agent(agent_id=agent_id)
 
         thread = await client.agents.threads.create()
@@ -87,6 +98,71 @@ async def query_agent(client: AIProjectClient, agent_id: str, query: str) -> Dic
         if run.status == "failed":
             error_msg = f"Agent run failed: {run.last_error}"
             logger.error(error_msg)
+            
+            if is_bing_ast_error(run.last_error):
+                logger.info("Detected Bing AST error, retrying until success...")
+                max_retries = 5  # Prevent infinite loop
+                retry_count = 0
+                
+                while retry_count < max_retries:
+                    retry_count += 1
+                    try:
+                        logger.info(f"Retry attempt {retry_count}/{max_retries}")
+                        retry_thread = await client.agents.threads.create()
+                        await client.agents.messages.create(thread_id=retry_thread.id, role=MessageRole.USER, content=query)
+                        retry_run = await client.agents.runs.create(thread_id=retry_thread.id, agent_id=agent_id)
+                        
+                        while retry_run.status in ["queued", "in_progress", "requires_action"]:
+                            await asyncio.sleep(1)
+                            retry_run = await client.agents.runs.get(thread_id=retry_thread.id, run_id=retry_run.id)
+                        
+                        if retry_run.status != "failed":
+                            logger.info(f"Retry {retry_count} succeeded, using retry results")
+                            thread_id = retry_thread.id
+                            run_id = retry_run.id
+                            response_messages = client.agents.messages.list(thread_id=thread_id)
+                            response_message = None
+                            async for msg in response_messages:
+                                if msg.role == MessageRole.AGENT:
+                                    response_message = msg
+                            
+                            result = ""
+                            citations = []
+                            if response_message:
+                                for text_message in response_message.text_messages:
+                                    result += text_message.text.value + "\n"
+                                for annotation in response_message.url_citation_annotations:
+                                    citation = f"[{annotation.url_citation.title}]({annotation.url_citation.url})"
+                                    if citation not in citations:
+                                        citations.append(citation)
+                            
+                            if citations:
+                                result += "\n\n## Sources\n"
+                                for citation in citations:
+                                    result += f"- {citation}\n"
+                            
+                            return {
+                                "success": True,
+                                "thread_id": thread_id,
+                                "run_id": run_id,
+                                "result": result.strip(),
+                                "citations": citations,
+                            }
+                        else:
+                            # Check if retry also has the same error
+                            if is_bing_ast_error(retry_run.last_error):
+                                logger.warning(f"Retry {retry_count} failed with same Bing AST error, continuing...")
+                                logger.error(f"Retry {retry_count} detailed error: {retry_run.last_error}")
+                                continue
+                            else:
+                                logger.error(f"Retry {retry_count} failed with different error: {retry_run.last_error}")
+                                break
+                    except Exception as e:
+                        logger.error(f"Retry attempt {retry_count} failed: {e}")
+                        continue
+                
+                logger.error(f"All {max_retries} retry attempts failed")
+            
             return {
                 "success": False,
                 "error": error_msg,
