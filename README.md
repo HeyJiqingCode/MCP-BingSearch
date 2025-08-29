@@ -84,7 +84,7 @@ docker build -t bing-search-mcp:1.0.0 -f Dockerfile .
 
 **3/ Run the container**:
 ```bash
-docker run -itd -p 8000:8000 \
+docker run -itd -p 8000:8000 --name BingSearch \
   -e AZURE_AI_FOUNDRY_PROJECT_ENDPOINT=your_ai_foundry_project_endpoint \
   -e AZURE_AI_FOUNDRY_AGENT_ID=your_bing_search_agent_id \
   -e AZURE_TENANT_ID=your_tenant_id \
