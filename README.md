@@ -151,6 +151,6 @@ The server supports three transport protocols:
 
 All transports run on port 8000 by default.
 
-## More Deatils
+## More Details
 
 See [MCP Server for Grounding with Bing Search](https://heyjiqing.notion.site/MCP-Server-for-Grounding-with-Bing-Search-256de7b6e4e8806d8fcaf555b8b8126e)
